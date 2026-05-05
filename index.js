@@ -12,7 +12,7 @@ app.get("/", (req, res) => {
 app.post("/v1/messages", async (req, res) => {
   try {
     console.log("API KEY:", process.env.ANTHROPIC_API_KEY ? "present" : "MISSING");
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetch("https://api.proxyapi.ru/anthropic/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
