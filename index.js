@@ -16,7 +16,7 @@ app.post("/v1/messages", async (req, res) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.ANTHROPIC_API_KEY}`,,
+        "Authorization": `Bearer ${process.env.ANTHROPIC_API_KEY}`,
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(req.body),
