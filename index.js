@@ -11,42 +11,30 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const PROXY_URL = "https://api.proxyapi.ru/anthropic/v1";
 
 app.get("/", (req, res) => {
-  res.json({ status: "ok" });
+  res.json({ status: "ok", docs: "ready" });
 });
 
-// Получить эмбеддинг текста через OpenAI-совместимый эндпоинт ProxyAPI
-async function getEmbedding(text) {
-  const res = await fetch("https://api.proxyapi.ru/openai/v1/embeddings", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${ANTHROPIC_KEY}`,
-    },
-    body: JSON.stringify({
-      model: "text-embedding-3-small",
-      input: text,
-    }),
-  });
-  const data = await res.json();
-  return data.data?.[0]?.embedding;
-}
-
-// Поиск похожих документов в Supabase
-async function searchDocuments(embedding) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/match_documents`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": SUPABASE_KEY,
-      "Authorization": `Bearer ${SUPABASE_KEY}`,
-    },
-    body: JSON.stringify({
-      query_embedding: embedding,
-      match_threshold: 0.5,
-      match_count: 5,
-    }),
-  });
-  return await res.json();
+// Поиск по базе знаний через полнотекстовый поиск
+async function searchDocuments(query) {
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/rpc/search_documents`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_KEY,
+          "Authorization": `Bearer ${SUPABASE_KEY}`,
+        },
+        body: JSON.stringify({ query_text: query, match_count: 5 }),
+      }
+    );
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    console.log("Search error:", e.message);
+    return [];
+  }
 }
 
 // Основной эндпоинт чата
@@ -62,19 +50,14 @@ app.post("/v1/messages", async (req, res) => {
 
     let ragContext = "";
 
-    // Ищем в базе знаний если есть вопрос
-    if (userText && SUPABASE_URL && SUPABASE_KEY) {
-      try {
-        const embedding = await getEmbedding(userText);
-        if (embedding) {
-          const docs = await searchDocuments(embedding);
-          if (Array.isArray(docs) && docs.length > 0) {
-            ragContext = "\n\nРЕЛЕВАНТНЫЕ ФРАГМЕНТЫ ИЗ БАЗЫ ЗНАНИЙ:\n" +
-              docs.map(d => `[${d.metadata?.source || "Документ"}]\n${d.content}`).join("\n\n---\n\n");
-          }
-        }
-      } catch (e) {
-        console.log("RAG search failed:", e.message);
+    if (userText) {
+      const docs = await searchDocuments(userText);
+      if (docs.length > 0) {
+        ragContext = "\n\n---\nРЕЛЕВАНТНЫЕ ФРАГМЕНТЫ ИЗ БАЗЫ ЗНАНИЙ:\n\n" +
+          docs.map(d => `[${d.metadata?.source || "Документ"}, ${d.metadata?.title || ""}]\n${d.content}`).join("\n\n---\n\n");
+        console.log(`Найдено ${docs.length} релевантных фрагментов`);
+      } else {
+        console.log("Документы не найдены, отвечаю по общим знаниям");
       }
     }
 
@@ -91,7 +74,6 @@ app.post("/v1/messages", async (req, res) => {
     });
 
     const data = await response.json();
-    console.log("Response status:", response.status);
     res.json(data);
   } catch (err) {
     console.error("Error:", err.message);
@@ -99,32 +81,29 @@ app.post("/v1/messages", async (req, res) => {
   }
 });
 
-// Эндпоинт для загрузки документов в базу знаний
+// Загрузка документов в базу
 app.post("/upload-document", async (req, res) => {
   try {
     const { content, metadata } = req.body;
-
-    // Разбиваем текст на чанки по 1000 символов
+    const chunkSize = 800;
     const chunks = [];
-    for (let i = 0; i < content.length; i += 800) {
-      chunks.push(content.slice(i, i + 800));
+    for (let i = 0; i < content.length; i += chunkSize) {
+      chunks.push(content.slice(i, i + chunkSize));
     }
 
     let saved = 0;
     for (const chunk of chunks) {
-      const embedding = await getEmbedding(chunk);
-      if (!embedding) continue;
-
-      await fetch(`${SUPABASE_URL}/rest/v1/documents`, {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/documents`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "apikey": SUPABASE_KEY,
           "Authorization": `Bearer ${SUPABASE_KEY}`,
+          "Prefer": "return=minimal",
         },
-        body: JSON.stringify({ content: chunk, metadata, embedding }),
+        body: JSON.stringify({ content: chunk, metadata }),
       });
-      saved++;
+      if (r.ok) saved++;
     }
 
     res.json({ success: true, chunks: saved });
@@ -133,4 +112,6 @@ app.post("/upload-document", async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT || 3001);
+app.listen(process.env.PORT || 3001, () => {
+  console.log("ЭнергоНорм proxy started");
+});
