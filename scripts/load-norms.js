@@ -9,7 +9,7 @@
 require('dotenv').config()
 const https = require('https')
 const http = require('http')
-const pdf = require('pdf-parse')
+const { PDFParse } = require('pdf-parse')
 const { createClient } = require('@supabase/supabase-js')
 
 const supabase = createClient(
@@ -131,16 +131,19 @@ async function deleteSource(source) {
   await supabase.from('documents').delete().eq('metadata->>source', source)
 }
 
-// Загрузить чанки в Supabase
+// Загрузить чанки в Supabase батчами по 50
 async function uploadChunks(chunks, meta) {
+  const BATCH = 50
   let saved = 0
-  for (const [i, content] of chunks.entries()) {
-    const { error } = await supabase.from('documents').insert({
-      content,
-      metadata: { ...meta, chunk: i + 1, total: chunks.length },
-    })
-    if (!error) saved++
-    else console.error(`  ✗ Ошибка чанка ${i + 1}:`, error.message)
+  const rows = chunks.map((content, i) => ({
+    content,
+    metadata: { ...meta, chunk: i + 1, total: chunks.length },
+  }))
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const batch = rows.slice(i, i + BATCH)
+    const { error } = await supabase.from('documents').insert(batch)
+    if (!error) saved += batch.length
+    else console.error(`  ✗ Ошибка батча ${Math.floor(i / BATCH) + 1}:`, error.message)
   }
   return saved
 }
@@ -184,9 +187,10 @@ async function main() {
 
       // Парсим PDF
       process.stdout.write('парсю PDF... ')
-      const parsed = await pdf(buf)
-      const text = parsed.text
-      console.log(`${text.length} символов, ${parsed.numpages} стр.`)
+      const parser = new PDFParse({ data: buf })
+      const parsed = await parser.getText()
+      const text = parsed.text || ''
+      console.log(`${text.length} символов, ${parsed.total ?? parsed.pages?.length ?? '?'} стр.`)
 
       // Режем на чанки
       const chunks = chunkText(text)
