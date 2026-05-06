@@ -69,23 +69,8 @@ async function searchWeb(query) {
   return parts.join("\n\n---\n\n");
 }
 
-// ─── Определение инструментов для Claude ────────────────────────────────────
-const TOOLS = [
-  {
-    name: "web_search",
-    description: "Поиск актуальной информации в интернете. Используй когда: вопрос выходит за пределы базы знаний по нормативам, нужны актуальные данные (последние редакции, новости, цены, события), пользователь явно просит найти что-то в интернете, или вопрос общий и не связан с российскими электротехническими нормативами.",
-    input_schema: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description: "Поисковый запрос на русском языке. Формулируй конкретно и чётко.",
-        },
-      },
-      required: ["query"],
-    },
-  },
-];
+// Порог: если RAG нашёл меньше этого числа фрагментов — дополняем веб-поиском
+const RAG_MIN_THRESHOLD = 2;
 
 // ─── Основной системный промпт ───────────────────────────────────────────────
 const SYSTEM_BASE = `Ты — экспертный AI-ассистент сервиса «ЭнергоНорм» по нормативной базе электроэнергетики России. Аудитория: проектировщики, ГИПы, строители, проверяющие органы.
@@ -130,9 +115,10 @@ const SYSTEM_BASE = `Ты — экспертный AI-ассистент сер�
 
 ПРАВИЛА ОТВЕТОВ:
 1. По нормативным вопросам — всегда отвечай по базе знаний, указывай конкретный документ и номер пункта
-2. Если вопрос выходит за пределы нормативов — используй инструмент web_search для поиска в интернете
-3. После поиска — чётко указывай источник (URL) и дату если известна
-4. НИКОГДА не говори "у меня нет базы знаний" — это неправда
+2. Если в контексте есть раздел "ДАННЫЕ ИЗ ИНТЕРНЕТА" — используй их как дополнение к нормативам, сравнивай и синтезируй
+3. При использовании интернет-источников — указывай URL и дату
+4. Нормативный документ всегда приоритетнее интернет-источника при противоречии
+5. НИКОГДА не говори "у меня нет базы знаний" — это неправда
 
 СТРУКТУРА ОТВЕТА (для нормативных вопросов):
 ✅ МОЖНО / ❌ НЕЛЬЗЯ / ⚠️ УСЛОВНО
@@ -147,12 +133,49 @@ const SYSTEM_BASE = `Ты — экспертный AI-ассистент сер�
 💡 ПРАКТИЧЕСКАЯ РЕКОМЕНДАЦИЯ
 [Что делать конкретно]`;
 
-// ─── Цикл tool use ───────────────────────────────────────────────────────────
-async function runWithTools(messages, systemPrompt) {
-  let currentMessages = [...messages];
-  const maxIterations = 5;
+// ─── Основной эндпоинт чата ──────────────────────────────────────────────────
+app.post("/v1/messages", async (req, res) => {
+  try {
+    const { messages, system } = req.body;
 
-  for (let i = 0; i < maxIterations; i++) {
+    const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
+    const userText = Array.isArray(lastUserMsg?.content)
+      ? lastUserMsg.content.find(c => c.type === "text")?.text
+      : lastUserMsg?.content;
+
+    let ragContext = "";
+    let webContext = "";
+
+    if (userText) {
+      // Шаг 1: RAG — поиск по нормативной базе
+      const docs = await searchDocuments(userText);
+      if (docs.length > 0) {
+        ragContext = "\n\n========================================\n" +
+          "ФРАГМЕНТЫ ИЗ НОРМАТИВНОЙ БАЗЫ ЗНАНИЙ:\n\n" +
+          docs.map((d, i) =>
+            `[${i+1}] ${d.metadata?.source || "Документ"} — ${d.metadata?.title || ""}\n${d.content}`
+          ).join("\n\n---\n\n") +
+          "\n========================================\n";
+        console.log(`📚 RAG: ${docs.length} фрагментов для: ${userText.slice(0, 50)}`);
+      }
+
+      // Шаг 2: если нормативной базы недостаточно — дополняем веб-поиском
+      if (docs.length < RAG_MIN_THRESHOLD && TAVILY_KEY) {
+        try {
+          console.log(`🔍 Веб-поиск: "${userText.slice(0, 60)}"`);
+          const webResults = await searchWeb(userText + " электроэнергетика нормативы Россия");
+          webContext = "\n\n========================================\n" +
+            "ДАННЫЕ ИЗ ИНТЕРНЕТА (используй как дополнение, сравнивай с нормативами):\n\n" +
+            webResults +
+            "\n========================================\n";
+        } catch (e) {
+          console.log("Веб-поиск не удался:", e.message);
+        }
+      }
+    }
+
+    const systemPrompt = (system || SYSTEM_BASE) + ragContext + webContext;
+
     const response = await fetch(`${PROXY_URL}/messages`, {
       method: "POST",
       headers: {
@@ -164,77 +187,12 @@ async function runWithTools(messages, systemPrompt) {
         model: "claude-sonnet-4-20250514",
         max_tokens: 4000,
         system: systemPrompt,
-        tools: TOOLS,
-        messages: currentMessages,
+        messages,
       }),
     });
 
     const data = await response.json();
-
     if (data.error) throw new Error(data.error.message || "Ошибка Claude API");
-
-    // Нет tool_use — возвращаем финальный ответ
-    if (data.stop_reason !== "tool_use") {
-      return data;
-    }
-
-    // Есть tool_use — выполняем инструменты
-    const toolUseBlocks = data.content.filter(b => b.type === "tool_use");
-    const toolResults = [];
-
-    for (const block of toolUseBlocks) {
-      console.log(`🔍 web_search: "${block.input.query}"`);
-      let result;
-      try {
-        result = await searchWeb(block.input.query);
-      } catch (err) {
-        result = `Ошибка поиска: ${err.message}`;
-      }
-      toolResults.push({
-        type: "tool_result",
-        tool_use_id: block.id,
-        content: result,
-      });
-    }
-
-    // Добавляем ответ ассистента и результаты инструментов в историю
-    currentMessages = [
-      ...currentMessages,
-      { role: "assistant", content: data.content },
-      { role: "user", content: toolResults },
-    ];
-  }
-
-  throw new Error("Превышено максимальное количество итераций tool use");
-}
-
-// ─── Основной эндпоинт чата ──────────────────────────────────────────────────
-app.post("/v1/messages", async (req, res) => {
-  try {
-    const { messages, system } = req.body;
-
-    const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
-    const userText = Array.isArray(lastUserMsg?.content)
-      ? lastUserMsg.content.find(c => c.type === "text")?.text
-      : lastUserMsg?.content;
-
-    // RAG: поиск по базе знаний
-    let ragContext = "";
-    if (userText) {
-      const docs = await searchDocuments(userText);
-      if (docs.length > 0) {
-        ragContext = "\n\n========================================\n" +
-          "ФРАГМЕНТЫ ИЗ ЗАГРУЖЕННОЙ БАЗЫ ЗНАНИЙ (используй их при ответе):\n\n" +
-          docs.map((d, i) =>
-            `[${i+1}] Источник: ${d.metadata?.source || "Документ"} — ${d.metadata?.title || ""}\n${d.content}`
-          ).join("\n\n---\n\n") +
-          "\n========================================\n";
-        console.log(`📚 RAG: найдено ${docs.length} фрагментов для: ${userText?.slice(0, 50)}`);
-      }
-    }
-
-    const systemPrompt = (system || SYSTEM_BASE) + ragContext;
-    const data = await runWithTools(messages, systemPrompt);
     res.json(data);
 
   } catch (err) {
