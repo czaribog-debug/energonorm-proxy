@@ -1,6 +1,6 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Check, X, AlertTriangle, ClipboardList, FileText, Lightbulb } from 'lucide-react'
+import { Check, X, AlertTriangle, Ban, ClipboardList, FileText, Lightbulb } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const SECTION_PATTERNS: Array<{
@@ -12,6 +12,7 @@ const SECTION_PATTERNS: Array<{
   { match: /^✅\s*(МОЖНО|МОЖЕТ|ДА)/i, icon: Check, label: 'МОЖНО', tone: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
   { match: /^❌\s*(НЕЛЬЗЯ|НЕТ|НЕ\s+МОГУ)/i, icon: X, label: 'НЕЛЬЗЯ', tone: 'text-rose-600 bg-rose-50 border-rose-200' },
   { match: /^⚠️\s*УСЛОВНО/i, icon: AlertTriangle, label: 'УСЛОВНО', tone: 'text-amber-600 bg-amber-50 border-amber-200' },
+  { match: /^⛔\s*НЕ\s+СООТВЕТСТВУЕТ/i, icon: Ban, label: 'НЕ СООТВЕТСТВУЕТ', tone: 'text-orange-600 bg-orange-50 border-orange-200' },
 ]
 
 const HEADER_PATTERNS: Array<{
