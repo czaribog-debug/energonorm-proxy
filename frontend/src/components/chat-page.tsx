@@ -141,31 +141,40 @@ export function ChatPage({ messages, input, setInput, loading, send, uploadedDoc
                         <>
                           <MessageContent text={m.content} />
                           {currentChatId && (
-                            <div className="flex items-center gap-1 mt-2">
-                              <button
-                                onClick={() => rate(i, 1)}
-                                className={cn(
-                                  'p-1.5 rounded-md transition-colors',
-                                  ratings[i] === 1
-                                    ? 'text-emerald-600 bg-emerald-50'
-                                    : 'text-muted-foreground hover:text-foreground hover:bg-accent'
-                                )}
-                                title="Полезный ответ"
-                              >
-                                <ThumbsUp className="w-3.5 h-3.5" strokeWidth={2} />
-                              </button>
-                              <button
-                                onClick={() => rate(i, -1)}
-                                className={cn(
-                                  'p-1.5 rounded-md transition-colors',
-                                  ratings[i] === -1
-                                    ? 'text-rose-600 bg-rose-50'
-                                    : 'text-muted-foreground hover:text-foreground hover:bg-accent'
-                                )}
-                                title="Бесполезный ответ"
-                              >
-                                <ThumbsDown className="w-3.5 h-3.5" strokeWidth={2} />
-                              </button>
+                            <div className="mt-4 pt-3 border-t border-border/60 flex items-center gap-3">
+                              <span className="text-xs text-muted-foreground">
+                                {ratings[i] === 1
+                                  ? 'Спасибо за оценку!'
+                                  : ratings[i] === -1
+                                  ? 'Спасибо, мы учтём это.'
+                                  : 'Был ли ответ полезен?'}
+                              </span>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => rate(i, 1)}
+                                  className={cn(
+                                    'p-1.5 rounded-md border transition-colors',
+                                    ratings[i] === 1
+                                      ? 'text-emerald-600 bg-emerald-50 border-emerald-200'
+                                      : 'text-muted-foreground border-border hover:text-emerald-600 hover:bg-emerald-50/60 hover:border-emerald-200'
+                                  )}
+                                  title="Полезный ответ"
+                                >
+                                  <ThumbsUp className="w-4 h-4" strokeWidth={2} />
+                                </button>
+                                <button
+                                  onClick={() => rate(i, -1)}
+                                  className={cn(
+                                    'p-1.5 rounded-md border transition-colors',
+                                    ratings[i] === -1
+                                      ? 'text-rose-600 bg-rose-50 border-rose-200'
+                                      : 'text-muted-foreground border-border hover:text-rose-600 hover:bg-rose-50/60 hover:border-rose-200'
+                                  )}
+                                  title="Бесполезный ответ"
+                                >
+                                  <ThumbsDown className="w-4 h-4" strokeWidth={2} />
+                                </button>
+                              </div>
                             </div>
                           )}
                         </>
