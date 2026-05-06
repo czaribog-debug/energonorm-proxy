@@ -4,11 +4,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { getUsers, saveUsers, saveSession } from '@/lib/storage'
-import type { Session } from '@/lib/types'
+import { supabase } from '@/lib/supabase'
 
 interface Props {
-  onLogin: (session: Session) => void
+  onLogin: () => void
 }
 
 export function AuthScreen({ onLogin }: Props) {
@@ -17,25 +16,31 @@ export function AuthScreen({ onLogin }: Props) {
   const [pass, setPass] = useState('')
   const [name, setName] = useState('')
   const [err, setErr] = useState('')
+  const [loading, setLoading] = useState(false)
 
-  const submit = () => {
+  const submit = async () => {
     setErr('')
     if (!email || !pass) return setErr('Заполните все поля')
-    const users = getUsers()
+    if (mode === 'register' && !name) return setErr('Введите имя')
+    setLoading(true)
+
     if (mode === 'register') {
-      if (!name) return setErr('Введите имя')
-      if (users[email]) return setErr('Пользователь уже существует')
-      users[email] = { pass, name }
-      saveUsers(users)
-      const session = { email, name }
-      saveSession(session)
-      onLogin(session)
+      const { error } = await supabase.auth.signUp({
+        email,
+        password: pass,
+        options: { data: { name } },
+      })
+      if (error) { setErr(translateError(error.message)); setLoading(false); return }
+      // После регистрации сразу входим
+      const { error: loginErr } = await supabase.auth.signInWithPassword({ email, password: pass })
+      if (loginErr) { setErr(translateError(loginErr.message)); setLoading(false); return }
     } else {
-      if (!users[email] || users[email].pass !== pass) return setErr('Неверный email или пароль')
-      const session = { email, name: users[email].name }
-      saveSession(session)
-      onLogin(session)
+      const { error } = await supabase.auth.signInWithPassword({ email, password: pass })
+      if (error) { setErr(translateError(error.message)); setLoading(false); return }
     }
+
+    setLoading(false)
+    onLogin()
   }
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -64,18 +69,47 @@ export function AuthScreen({ onLogin }: Props) {
 
         <div className="flex flex-col gap-2.5">
           {mode === 'register' && (
-            <Input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={onKey} placeholder="Ваше имя" />
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={onKey}
+              placeholder="Ваше имя"
+              disabled={loading}
+            />
           )}
-          <Input value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={onKey} type="email" placeholder="Email" />
-          <Input value={pass} onChange={(e) => setPass(e.target.value)} onKeyDown={onKey} type="password" placeholder="Пароль" />
+          <Input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={onKey}
+            type="email"
+            placeholder="Email"
+            disabled={loading}
+          />
+          <Input
+            value={pass}
+            onChange={(e) => setPass(e.target.value)}
+            onKeyDown={onKey}
+            type="password"
+            placeholder="Пароль"
+            disabled={loading}
+          />
           {err && (
             <div className="text-sm text-destructive bg-destructive/10 rounded-lg px-3 py-2">{err}</div>
           )}
-          <Button onClick={submit} className="mt-1">
-            {mode === 'login' ? 'Войти' : 'Создать аккаунт'}
+          <Button onClick={submit} disabled={loading} className="mt-1">
+            {loading ? 'Подождите...' : mode === 'login' ? 'Войти' : 'Создать аккаунт'}
           </Button>
         </div>
       </Card>
     </div>
   )
+}
+
+function translateError(msg: string): string {
+  if (msg.includes('Invalid login credentials')) return 'Неверный email или пароль'
+  if (msg.includes('Email not confirmed')) return 'Подтвердите email перед входом'
+  if (msg.includes('User already registered')) return 'Пользователь с таким email уже существует'
+  if (msg.includes('Password should be at least')) return 'Пароль должен быть не менее 6 символов'
+  if (msg.includes('Unable to validate email address')) return 'Некорректный email'
+  return msg
 }

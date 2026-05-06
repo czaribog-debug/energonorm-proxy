@@ -1,16 +1,19 @@
 import { useEffect, useState } from 'react'
+import type { User } from '@supabase/supabase-js'
+import { supabase } from '@/lib/supabase'
 import { AuthScreen } from '@/components/auth-screen'
 import { Sidebar } from '@/components/sidebar'
 import { ChatPage } from '@/components/chat-page'
 import { DocsPage } from '@/components/docs-page'
 import { UploadPage } from '@/components/upload-page'
 import { AboutPage } from '@/components/about-page'
-import { clearSession, getChats, getSession, saveChats } from '@/lib/storage'
+import { getChats, saveChats } from '@/lib/storage'
 import { PROXY_URL, SYSTEM_PROMPT } from '@/lib/constants'
 import type { Chat, Message, Page, Session, UploadedDoc } from '@/lib/types'
 
 export default function App() {
-  const [user, setUser] = useState<Session | null>(() => getSession())
+  const [user, setUser] = useState<User | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
   const [page, setPage] = useState<Page>('chat')
   const [chats, setChats] = useState<Chat[]>([])
   const [currentChatId, setCurrentChatId] = useState<string | null>(null)
@@ -19,13 +22,29 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [uploadedDocs, setUploadedDocs] = useState<UploadedDoc[]>([])
 
+  // Подписываемся на изменения сессии Supabase
   useEffect(() => {
-    if (user) setChats(getChats(user.email))
+    supabase.auth.getSession().then(({ data }) => {
+      setUser(data.session?.user ?? null)
+      setAuthLoading(false)
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+    })
+    return () => subscription.unsubscribe()
+  }, [])
+
+  useEffect(() => {
+    if (user) setChats(getChats(user.email ?? user.id))
   }, [user])
 
-  const persistChats = (email: string, updated: Chat[]) => {
+  const session: Session | null = user
+    ? { email: user.email ?? '', name: user.user_metadata?.name ?? user.email ?? '' }
+    : null
+
+  const persistChats = (updated: Chat[]) => {
     setChats(updated)
-    saveChats(email, updated)
+    if (user) saveChats(user.email ?? user.id, updated)
   }
 
   const newChat = () => {
@@ -92,7 +111,7 @@ export default function App() {
           ? chats.map((c) => (c.id === chatId ? { ...c, messages: finalMsgs } : c))
           : [{ id: chatId, title, messages: finalMsgs }, ...chats].slice(0, 30)
         setCurrentChatId(chatId)
-        persistChats(user.email, updated)
+        persistChats(updated)
       }
     } catch {
       setMessages([...messages, userMsg, { role: 'assistant', content: 'Ошибка соединения. Попробуйте ещё раз.' }])
@@ -100,15 +119,16 @@ export default function App() {
     setLoading(false)
   }
 
-  if (!user) {
+  if (authLoading) {
     return (
-      <AuthScreen
-        onLogin={(u) => {
-          setUser(u)
-          setChats(getChats(u.email))
-        }}
-      />
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
     )
+  }
+
+  if (!user || !session) {
+    return <AuthScreen onLogin={() => {}} />
   }
 
   const headerLabel =
@@ -123,13 +143,8 @@ export default function App() {
         currentChatId={currentChatId}
         onNewChat={newChat}
         onSelectChat={selectChat}
-        user={user}
-        onLogout={() => {
-          clearSession()
-          setUser(null)
-          setChats([])
-          newChat()
-        }}
+        user={session}
+        onLogout={() => supabase.auth.signOut()}
       />
       <div className="flex-1 flex flex-col overflow-hidden">
         <header className="flex items-center justify-between border-b px-6 py-3">
