@@ -156,6 +156,36 @@ app.post("/v1/messages", async (req, res) => {
   }
 });
 
+// Список источников в базе знаний (агрегация по metadata.source)
+app.get("/documents", async (req, res) => {
+  try {
+    const r = await fetch(
+      `${SUPABASE_URL}/rest/v1/documents?select=metadata`,
+      {
+        headers: {
+          "apikey": SUPABASE_KEY,
+          "Authorization": `Bearer ${SUPABASE_KEY}`,
+        },
+      }
+    );
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return res.json({ sources: [], total: 0 });
+
+    const counts = new Map();
+    for (const row of rows) {
+      const src = row?.metadata?.source || row?.metadata?.title || "Без названия";
+      counts.set(src, (counts.get(src) || 0) + 1);
+    }
+    const sources = [...counts.entries()]
+      .map(([source, chunks]) => ({ source, chunks }))
+      .sort((a, b) => a.source.localeCompare(b.source, "ru"));
+
+    res.json({ sources, total: rows.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Загрузка документов в базу
 app.post("/upload-document", async (req, res) => {
   try {
