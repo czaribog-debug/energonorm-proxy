@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { User } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
+import { loadChats, upsertChat, deleteChat } from '@/lib/chats'
 import { AuthScreen } from '@/components/auth-screen'
 import { Sidebar } from '@/components/sidebar'
 import { ChatPage } from '@/components/chat-page'
 import { DocsPage } from '@/components/docs-page'
 import { UploadPage } from '@/components/upload-page'
 import { AboutPage } from '@/components/about-page'
-import { getChats, saveChats } from '@/lib/storage'
 import { PROXY_URL, SYSTEM_PROMPT } from '@/lib/constants'
 import type { Chat, Message, Page, Session, UploadedDoc } from '@/lib/types'
 
@@ -22,7 +22,6 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [uploadedDocs, setUploadedDocs] = useState<UploadedDoc[]>([])
 
-  // Подписываемся на изменения сессии Supabase
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user ?? null)
@@ -35,17 +34,13 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (user) setChats(getChats(user.email ?? user.id))
+    if (user) loadChats().then(setChats)
+    else setChats([])
   }, [user])
 
   const session: Session | null = user
     ? { email: user.email ?? '', name: user.user_metadata?.name ?? user.email ?? '' }
     : null
-
-  const persistChats = (updated: Chat[]) => {
-    setChats(updated)
-    if (user) saveChats(user.email ?? user.id, updated)
-  }
 
   const newChat = () => {
     setCurrentChatId(null)
@@ -61,7 +56,14 @@ export default function App() {
       setCurrentChatId(id)
       setMessages(c.messages)
       setUploadedDocs([])
+      setPage('chat')
     }
+  }
+
+  const removeChat = async (id: string) => {
+    await deleteChat(id)
+    setChats((prev) => prev.filter((c) => c.id !== id))
+    if (currentChatId === id) newChat()
   }
 
   const send = async (q?: string) => {
@@ -104,15 +106,17 @@ export default function App() {
       const finalMsgs: Message[] = [...messages, userMsg, { role: 'assistant', content: answer }]
       setMessages(finalMsgs)
 
-      if (user) {
-        const chatId = currentChatId || Date.now().toString()
-        const title = text.slice(0, 45) + (text.length > 45 ? '…' : '')
-        const updated = currentChatId
-          ? chats.map((c) => (c.id === chatId ? { ...c, messages: finalMsgs } : c))
-          : [{ id: chatId, title, messages: finalMsgs }, ...chats].slice(0, 30)
-        setCurrentChatId(chatId)
-        persistChats(updated)
-      }
+      const chatId = currentChatId || crypto.randomUUID()
+      const title = text.slice(0, 45) + (text.length > 45 ? '…' : '')
+      const updatedChat: Chat = { id: chatId, title: currentChatId ? (chats.find(c => c.id === chatId)?.title ?? title) : title, messages: finalMsgs }
+
+      setCurrentChatId(chatId)
+      setChats((prev) =>
+        currentChatId
+          ? prev.map((c) => (c.id === chatId ? updatedChat : c))
+          : [updatedChat, ...prev].slice(0, 30)
+      )
+      upsertChat(updatedChat)
     } catch {
       setMessages([...messages, userMsg, { role: 'assistant', content: 'Ошибка соединения. Попробуйте ещё раз.' }])
     }
@@ -143,6 +147,7 @@ export default function App() {
         currentChatId={currentChatId}
         onNewChat={newChat}
         onSelectChat={selectChat}
+        onDeleteChat={removeChat}
         user={session}
         onLogout={() => supabase.auth.signOut()}
       />

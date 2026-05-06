@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, MessageSquare, BookOpen, Upload, Info, ChevronLeft, ChevronRight, ChevronsUpDown, LogOut, User as UserIcon } from 'lucide-react'
+import { Plus, MessageSquare, BookOpen, Upload, Info, ChevronLeft, ChevronRight, ChevronsUpDown, LogOut, User as UserIcon, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { Chat, Page, Session } from '@/lib/types'
@@ -11,6 +11,7 @@ interface Props {
   currentChatId: string | null
   onNewChat: () => void
   onSelectChat: (id: string) => void
+  onDeleteChat: (id: string) => void
   user: Session
   onLogout: () => void
 }
@@ -22,7 +23,7 @@ const NAV: Array<{ id: Page; icon: typeof MessageSquare; label: string }> = [
   { id: 'about', icon: Info, label: 'О сервисе' },
 ]
 
-export function Sidebar({ page, setPage, chats, currentChatId, onNewChat, onSelectChat, user, onLogout }: Props) {
+export function Sidebar({ page, setPage, chats, currentChatId, onNewChat, onSelectChat, onDeleteChat, user, onLogout }: Props) {
   const [collapsed, setCollapsed] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
 
@@ -97,19 +98,27 @@ export function Sidebar({ page, setPage, chats, currentChatId, onNewChat, onSele
             </div>
             <div className="space-y-0.5">
               {chats.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => { onSelectChat(c.id); setPage('chat') }}
-                  title={c.title}
-                  className={cn(
-                    'w-full text-left px-2.5 py-1.5 rounded-md text-xs truncate transition-colors',
-                    currentChatId === c.id
-                      ? 'bg-accent text-accent-foreground'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
-                  )}
-                >
-                  {c.title}
-                </button>
+                <div key={c.id} className="group relative">
+                  <button
+                    onClick={() => onSelectChat(c.id)}
+                    title={c.title}
+                    className={cn(
+                      'w-full text-left px-2.5 py-1.5 pr-7 rounded-md text-xs truncate transition-colors',
+                      currentChatId === c.id
+                        ? 'bg-accent text-accent-foreground'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                    )}
+                  >
+                    {c.title}
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDeleteChat(c.id) }}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:text-destructive"
+                    title="Удалить чат"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
               ))}
             </div>
           </>
