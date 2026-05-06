@@ -22,6 +22,7 @@ const supabase = createClient(
 // source: короткое имя (используется для дедупликации)
 // title: полное название документа
 const DOCS = [
+  // Уже загруженные
   {
     source: 'ПУЭ-7',
     title: 'Правила устройства электроустановок. 7-е издание',
@@ -47,14 +48,46 @@ const DOCS = [
     title: 'Степени защиты, обеспечиваемые оболочками (Код IP)',
     url: 'https://meganorm.ru/Data2/1/4293754/4293754313.pdf',
   },
+  // Новые приоритетные
+  {
+    source: 'ПОТЭУ',
+    title: 'Правила по охране труда при эксплуатации электроустановок (Приказ Минтруда №903н от 15.12.2020)',
+    url: 'https://www.serconsrus.ru/app/uploads/2024/04/pravila-po-ohrane-truda.pdf',
+  },
+  {
+    source: 'ФЗ-116',
+    title: 'Федеральный закон от 21.07.1997 №116-ФЗ "О промышленной безопасности опасных производственных объектов"',
+    url: 'https://artbur.ru/upload/o_prom_bezopasnosti.pdf',
+  },
+  {
+    source: 'СП 48.13330.2019',
+    title: 'Организация строительства. Актуализированная редакция СНиП 12-01-2004',
+    url: 'https://files.stroyinf.ru/Data2/1/4293722/4293722445.pdf',
+  },
+  {
+    source: 'СП 77.13330.2016',
+    title: 'Системы автоматизации. Актуализированная редакция СНиП 3.05.07-85',
+    url: 'https://files.stroyinf.ru/Data2/1/4293747/4293747669.pdf',
+  },
+  {
+    source: 'ГОСТ Р 50571.5.54-2013',
+    title: 'Электроустановки низковольтные. Часть 5-54. Заземляющие устройства, защитные проводники и проводники уравнивания потенциалов',
+    url: 'https://files.stroyinf.ru/Data2/1/4293775/4293775104.pdf',
+  },
+  {
+    source: 'ГОСТ Р 50571.3-2009',
+    title: 'Электроустановки низковольтные. Часть 4-41. Защита от поражения электрическим током',
+    url: 'https://meganorm.ru/Data2/1/4293725/4293725420.pdf',
+  },
 ]
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CHUNK_SIZE = 1000   // символов в чанке
 const CHUNK_OVERLAP = 150 // перекрытие между чанками
 
-const isDryRun = process.argv.includes('--dry-run')
-const isForce  = process.argv.includes('--force')
+const isDryRun  = process.argv.includes('--dry-run')
+const isForce   = process.argv.includes('--force')
+const isCleanup = process.argv.includes('--cleanup')
 
 // Скачать файл по URL → Buffer
 function download(url) {
@@ -148,8 +181,49 @@ async function uploadChunks(chunks, meta) {
   return saved
 }
 
+const STUB_THRESHOLD = 5  // источники с < 5 чанков считаем огрызками
+
+// Удалить: (1) источники не из DOCS; (2) источники из DOCS с < STUB_THRESHOLD чанков
+async function cleanupOrphans() {
+  const validSources = new Set(DOCS.map(d => d.source))
+  // Используем существующий RPC, который точно агрегирует все строки
+  const { data, error } = await supabase.rpc('list_sources')
+  if (error) throw error
+
+  const toDelete = []
+  for (const { source: src, chunks } of data || []) {
+    const n = Number(chunks)
+    if (!validSources.has(src)) {
+      toDelete.push({ src, n, reason: 'не в DOCS' })
+    } else if (n < STUB_THRESHOLD) {
+      toDelete.push({ src, n, reason: 'огрызок' })
+    }
+  }
+
+  if (toDelete.length === 0) {
+    console.log('  Огрызков нет.')
+    return
+  }
+  console.log(`  Удаляю ${toDelete.length} источника(ов):`)
+  for (const { src, n, reason } of toDelete) {
+    const { error: delErr } = await supabase
+      .from('documents')
+      .delete()
+      .eq('metadata->>source', src)
+    if (delErr) console.error(`    ✗ ${src}: ${delErr.message}`)
+    else console.log(`    ✓ ${src} (${n} чанков, ${reason})`)
+  }
+}
+
 // ─── Основной цикл ────────────────────────────────────────────────────────────
 async function main() {
+  if (isCleanup) {
+    console.log('\n🧹 Очистка огрызков (всё что не в DOCS)')
+    console.log('─'.repeat(50))
+    await cleanupOrphans()
+    console.log('─'.repeat(50))
+  }
+
   const docs = DOCS.filter(d => d.url)
 
   if (docs.length === 0) {
