@@ -172,7 +172,7 @@ const SYSTEM_BASE = `Ты — экспертный AI-ассистент сер�
 // ─── Основной эндпоинт чата ──────────────────────────────────────────────────
 app.post("/v1/messages", async (req, res) => {
   try {
-    const { messages, system } = req.body;
+    const { messages, system, projectContext, projectName } = req.body;
 
     const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
     const userText = Array.isArray(lastUserMsg?.content)
@@ -210,7 +210,18 @@ app.post("/v1/messages", async (req, res) => {
       }
     }
 
-    const systemPrompt = (system || SYSTEM_BASE) + ragContext + webContext;
+    let projectBlock = "";
+    if (projectContext && projectContext.trim().length > 0) {
+      projectBlock = "\n\n========================================\n" +
+        `ДОКУМЕНТЫ ТЕКУЩЕГО ПРОЕКТА${projectName ? ` «${projectName}»` : ""} (рабочий контекст пользователя):\n` +
+        "Используй эти документы при ответе наравне с нормативной базой. " +
+        "При противоречии между документом проекта и нормативом — указывай, чем именно нормативное требование отличается от того, что в документе пользователя.\n\n" +
+        projectContext +
+        "\n========================================\n";
+      console.log(`📁 Project context: ${projectContext.length} символов${projectName ? ` (${projectName})` : ""}`);
+    }
+
+    const systemPrompt = (system || SYSTEM_BASE) + projectBlock + ragContext + webContext;
 
     const response = await fetch(`${PROXY_URL}/messages`, {
       method: "POST",
