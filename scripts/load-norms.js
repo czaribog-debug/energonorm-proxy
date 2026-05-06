@@ -25,32 +25,27 @@ const DOCS = [
   {
     source: 'ПУЭ-7',
     title: 'Правила устройства электроустановок. 7-е издание',
-    url: 'https://www.consultant.ru/document/cons_doc_LAW_98464/', // замени на прямой PDF
+    url: 'https://www.ruscable.ru/info/pue/pue7.pdf',
   },
   {
-    source: 'ПТЭЭП',
-    title: 'Правила технической эксплуатации электроустановок потребителей',
-    url: '', // TODO: добавить ссылку
-  },
-  {
-    source: 'ПОТЭУ',
-    title: 'Правила охраны труда при эксплуатации электроустановок (Приказ Минтруда №903н)',
-    url: '', // TODO: добавить ссылку
+    source: 'ПТЭЭП-2022',
+    title: 'Правила технической эксплуатации электроустановок потребителей электрической энергии (Приказ Минэнерго №811 от 12.08.2022)',
+    url: 'https://www.volt-spb.ru/media/docs/ntd/zazemlenie/pravila-tehnicheskoj-ekspluatacii-elektroustanovok-potrebitelej-elektricheskoj-energii-pteepee.pdf',
   },
   {
     source: 'СП 76.13330.2016',
-    title: 'Электротехнические устройства',
-    url: '', // TODO: minstroyrf.gov.ru
+    title: 'Электротехнические устройства. Актуализированная редакция СНиП 3.05.06-85',
+    url: 'https://files.stroyinf.ru/Data2/1/4293747/4293747637.pdf',
   },
   {
     source: 'СП 256.1325800.2016',
     title: 'Электроустановки жилых и общественных зданий. Правила проектирования и монтажа',
-    url: '', // TODO: добавить ссылку
+    url: 'https://meganorm.ru/Data2/1/4293751/4293751598.pdf',
   },
   {
     source: 'ГОСТ 14254-2015',
     title: 'Степени защиты, обеспечиваемые оболочками (Код IP)',
-    url: '', // TODO: gost.ru
+    url: 'https://meganorm.ru/Data2/1/4293754/4293754313.pdf',
   },
 ]
 // ─────────────────────────────────────────────────────────────────────────────
