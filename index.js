@@ -8,16 +8,16 @@ app.use(express.json({ limit: "50mb" }));
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+const TAVILY_KEY = process.env.TAVILY_API_KEY;
 const PROXY_URL = "https://api.proxyapi.ru/anthropic/v1";
 
 app.get("/", (req, res) => {
   res.json({ status: "ok", docs: "ready" });
 });
 
-// Поиск по базе знаний — несколько стратегий
+// ─── Поиск по базе знаний ────────────────────────────────────────────────────
 async function searchDocuments(query) {
   try {
-    // Стратегия 1: полнотекстовый поиск
     const res1 = await fetch(`${SUPABASE_URL}/rest/v1/rpc/search_documents`, {
       method: "POST",
       headers: {
@@ -30,12 +30,7 @@ async function searchDocuments(query) {
     const data1 = await res1.json();
     if (Array.isArray(data1) && data1.length > 0) return data1;
 
-    // Стратегия 2: если ничего не нашли — берём первые 5 релевантных по ключевым словам
-    const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-    if (words.length === 0) return [];
-
-    const shortQuery = words.slice(0, 3).join(" | ");
-    const res2 = await fetch(`${SUPABASE_URL}/rest/v1/documents?select=id,content,metadata&limit=5`, {
+    const res2 = await fetch(`${SUPABASE_URL}/rest/v1/documents?select=id,content,metadata&limit=3`, {
       headers: {
         "apikey": SUPABASE_KEY,
         "Authorization": `Bearer ${SUPABASE_KEY}`,
@@ -49,33 +44,51 @@ async function searchDocuments(query) {
   }
 }
 
-// Основной эндпоинт чата
-app.post("/v1/messages", async (req, res) => {
-  try {
-    const { messages, system, ...rest } = req.body;
+// ─── Поиск в интернете через Tavily ─────────────────────────────────────────
+async function searchWeb(query) {
+  if (!TAVILY_KEY) throw new Error("TAVILY_API_KEY не задан");
+  const res = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: TAVILY_KEY,
+      query,
+      search_depth: "basic",
+      max_results: 5,
+      include_answer: true,
+    }),
+  });
+  const data = await res.json();
+  if (!data.results) throw new Error(data.error || "Tavily не вернул результаты");
 
-    const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
-    const userText = Array.isArray(lastUserMsg?.content)
-      ? lastUserMsg.content.find(c => c.type === "text")?.text
-      : lastUserMsg?.content;
+  const parts = [];
+  if (data.answer) parts.push(`Краткий ответ: ${data.answer}\n`);
+  data.results.forEach((r, i) => {
+    parts.push(`[${i + 1}] ${r.title}\nURL: ${r.url}\n${r.content}`);
+  });
+  return parts.join("\n\n---\n\n");
+}
 
-    let ragContext = "";
-    let docsCount = 0;
+// ─── Определение инструментов для Claude ────────────────────────────────────
+const TOOLS = [
+  {
+    name: "web_search",
+    description: "Поиск актуальной информации в интернете. Используй когда: вопрос выходит за пределы базы знаний по нормативам, нужны актуальные данные (последние редакции, новости, цены, события), пользователь явно просит найти что-то в интернете, или вопрос общий и не связан с российскими электротехническими нормативами.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Поисковый запрос на русском языке. Формулируй конкретно и чётко.",
+        },
+      },
+      required: ["query"],
+    },
+  },
+];
 
-    if (userText) {
-      const docs = await searchDocuments(userText);
-      docsCount = docs.length;
-      if (docs.length > 0) {
-        ragContext = "\n\n========================================\n" +
-          "ФРАГМЕНТЫ ИЗ ЗАГРУЖЕННОЙ БАЗЫ ЗНАНИЙ (используй их при ответе):\n\n" +
-          docs.map((d, i) =>
-            `[${i+1}] Источник: ${d.metadata?.source || "Документ"} — ${d.metadata?.title || ""}\n${d.content}`
-          ).join("\n\n---\n\n") +
-          "\n========================================\n";
-      }
-    }
-
-    const SYSTEM = `Ты — экспертный AI-ассистент сервиса «ЭнергоНорм» по нормативной базе электроэнергетики России. Аудитория: проектировщики, ГИПы, строители, проверяющие органы.
+// ─── Основной системный промпт ───────────────────────────────────────────────
+const SYSTEM_BASE = `Ты — экспертный AI-ассистент сервиса «ЭнергоНорм» по нормативной базе электроэнергетики России. Аудитория: проектировщики, ГИПы, строители, проверяющие органы.
 
 ═══════════════════════════════════════
 ТВОЯ ЗАГРУЖЕННАЯ БАЗА ЗНАНИЙ (51 фрагмент из 34 документов):
@@ -116,13 +129,12 @@ app.post("/v1/messages", async (req, res) => {
 ═══════════════════════════════════════
 
 ПРАВИЛА ОТВЕТОВ:
-1. Ты ВСЕГДА отвечаешь на основе своей базы знаний — она у тебя ЕСТЬ
-2. Если в разделе "ФРАГМЕНТЫ ИЗ БАЗЫ ЗНАНИЙ" переданы документы — ИСПОЛЬЗУЙ их и ссылайся на конкретные пункты
-3. Если фрагменты не переданы — отвечай по знаниям из списка выше
+1. По нормативным вопросам — всегда отвечай по базе знаний, указывай конкретный документ и номер пункта
+2. Если вопрос выходит за пределы нормативов — используй инструмент web_search для поиска в интернете
+3. После поиска — чётко указывай источник (URL) и дату если известна
 4. НИКОГДА не говори "у меня нет базы знаний" — это неправда
-5. Всегда указывай конкретный документ и номер пункта
 
-СТРУКТУРА ОТВЕТА:
+СТРУКТУРА ОТВЕТА (для нормативных вопросов):
 ✅ МОЖНО / ❌ НЕЛЬЗЯ / ⚠️ УСЛОВНО
 [Краткий ответ]
 
@@ -135,9 +147,12 @@ app.post("/v1/messages", async (req, res) => {
 💡 ПРАКТИЧЕСКАЯ РЕКОМЕНДАЦИЯ
 [Что делать конкретно]`;
 
-    const enhancedSystem = SYSTEM + ragContext;
-    console.log(`Найдено ${docsCount} фрагментов для запроса: ${userText?.slice(0,50)}`);
+// ─── Цикл tool use ───────────────────────────────────────────────────────────
+async function runWithTools(messages, systemPrompt) {
+  let currentMessages = [...messages];
+  const maxIterations = 5;
 
+  for (let i = 0; i < maxIterations; i++) {
     const response = await fetch(`${PROXY_URL}/messages`, {
       method: "POST",
       headers: {
@@ -145,18 +160,90 @@ app.post("/v1/messages", async (req, res) => {
         "Authorization": `Bearer ${ANTHROPIC_KEY}`,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify({ messages, system: enhancedSystem, ...rest }),
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 4000,
+        system: systemPrompt,
+        tools: TOOLS,
+        messages: currentMessages,
+      }),
     });
 
     const data = await response.json();
+
+    if (data.error) throw new Error(data.error.message || "Ошибка Claude API");
+
+    // Нет tool_use — возвращаем финальный ответ
+    if (data.stop_reason !== "tool_use") {
+      return data;
+    }
+
+    // Есть tool_use — выполняем инструменты
+    const toolUseBlocks = data.content.filter(b => b.type === "tool_use");
+    const toolResults = [];
+
+    for (const block of toolUseBlocks) {
+      console.log(`🔍 web_search: "${block.input.query}"`);
+      let result;
+      try {
+        result = await searchWeb(block.input.query);
+      } catch (err) {
+        result = `Ошибка поиска: ${err.message}`;
+      }
+      toolResults.push({
+        type: "tool_result",
+        tool_use_id: block.id,
+        content: result,
+      });
+    }
+
+    // Добавляем ответ ассистента и результаты инструментов в историю
+    currentMessages = [
+      ...currentMessages,
+      { role: "assistant", content: data.content },
+      { role: "user", content: toolResults },
+    ];
+  }
+
+  throw new Error("Превышено максимальное количество итераций tool use");
+}
+
+// ─── Основной эндпоинт чата ──────────────────────────────────────────────────
+app.post("/v1/messages", async (req, res) => {
+  try {
+    const { messages, system } = req.body;
+
+    const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
+    const userText = Array.isArray(lastUserMsg?.content)
+      ? lastUserMsg.content.find(c => c.type === "text")?.text
+      : lastUserMsg?.content;
+
+    // RAG: поиск по базе знаний
+    let ragContext = "";
+    if (userText) {
+      const docs = await searchDocuments(userText);
+      if (docs.length > 0) {
+        ragContext = "\n\n========================================\n" +
+          "ФРАГМЕНТЫ ИЗ ЗАГРУЖЕННОЙ БАЗЫ ЗНАНИЙ (используй их при ответе):\n\n" +
+          docs.map((d, i) =>
+            `[${i+1}] Источник: ${d.metadata?.source || "Документ"} — ${d.metadata?.title || ""}\n${d.content}`
+          ).join("\n\n---\n\n") +
+          "\n========================================\n";
+        console.log(`📚 RAG: найдено ${docs.length} фрагментов для: ${userText?.slice(0, 50)}`);
+      }
+    }
+
+    const systemPrompt = (system || SYSTEM_BASE) + ragContext;
+    const data = await runWithTools(messages, systemPrompt);
     res.json(data);
+
   } catch (err) {
     console.error("Error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Список источников в базе знаний через RPC (обходит RLS)
+// ─── Список источников в базе знаний ────────────────────────────────────────
 app.get("/documents", async (req, res) => {
   try {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/list_sources`, {
@@ -179,7 +266,7 @@ app.get("/documents", async (req, res) => {
   }
 });
 
-// Загрузка документов в базу
+// ─── Загрузка документов в базу ─────────────────────────────────────────────
 app.post("/upload-document", async (req, res) => {
   try {
     const { content, metadata } = req.body;
