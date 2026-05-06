@@ -5,3 +5,5 @@ node_modules/
 dist/
 .DS_Store
 .claude/
+scripts/docs/*.pdf
+scripts/docs-local.json

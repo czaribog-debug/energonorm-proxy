@@ -1,12 +1,27 @@
 /**
  * Скрипт массовой загрузки нормативных документов в Supabase.
- * Использование:
- *   node scripts/load-norms.js              — загрузить все документы из DOCS
+ *
+ * Вариант Б (URL):
+ *   node scripts/load-norms.js              — загрузить все из списка DOCS (URL)
  *   node scripts/load-norms.js --dry-run    — показать список без загрузки
  *   node scripts/load-norms.js --force      — перезаписать уже загруженные
+ *   node scripts/load-norms.js --cleanup    — удалить огрызки и устаревшие
+ *
+ * Вариант А (локальные файлы):
+ *   node scripts/load-norms.js --local                        — загрузить PDF из scripts/docs/
+ *   node scripts/load-norms.js --local --dir ./my-pdfs        — из другой папки
+ *   node scripts/load-norms.js --local --force                — перезаписать
+ *   node scripts/load-norms.js --local --dry-run              — только показать файлы
+ *
+ * Метаданные (имя, название) для локальных файлов:
+ *   Создай файл scripts/docs-local.json:
+ *   { "ПУЭ-7.pdf": { "source": "ПУЭ-7", "title": "Правила устройства электроустановок" }, ... }
+ *   Если файл не найден — source = имя файла без расширения, title = то же самое.
  */
 
 require('dotenv').config()
+const fs = require('fs')
+const path = require('path')
 const https = require('https')
 const http = require('http')
 const { PDFParse } = require('pdf-parse')
@@ -88,6 +103,13 @@ const CHUNK_OVERLAP = 150 // перекрытие между чанками
 const isDryRun  = process.argv.includes('--dry-run')
 const isForce   = process.argv.includes('--force')
 const isCleanup = process.argv.includes('--cleanup')
+const isLocal   = process.argv.includes('--local')
+
+// --dir ./path/to/folder
+const dirArgIdx = process.argv.indexOf('--dir')
+const localDir = dirArgIdx !== -1
+  ? path.resolve(process.argv[dirArgIdx + 1])
+  : path.resolve(__dirname, 'docs')
 
 // Скачать файл по URL → Buffer
 function download(url) {
@@ -215,8 +237,102 @@ async function cleanupOrphans() {
   }
 }
 
+// ─── Загрузка локальных PDF ───────────────────────────────────────────────────
+async function loadLocalDocs() {
+  if (!fs.existsSync(localDir)) {
+    console.log(`\n⚠️  Папка не найдена: ${localDir}`)
+    console.log('Создай её и положи туда PDF-файлы:')
+    console.log(`  mkdir -p "${localDir}"`)
+    return
+  }
+
+  // Опциональный маппинг: filename → { source, title }
+  const metaPath = path.join(__dirname, 'docs-local.json')
+  let metaMap = {}
+  if (fs.existsSync(metaPath)) {
+    try {
+      metaMap = JSON.parse(fs.readFileSync(metaPath, 'utf8'))
+      console.log(`  Метаданные загружены из docs-local.json (${Object.keys(metaMap).length} записей)`)
+    } catch (e) {
+      console.warn(`  ⚠️ Не удалось разобрать docs-local.json: ${e.message}`)
+    }
+  }
+
+  const files = fs.readdirSync(localDir)
+    .filter(f => f.toLowerCase().endsWith('.pdf'))
+    .sort()
+
+  if (files.length === 0) {
+    console.log(`\n⚠️  В папке ${localDir} нет PDF-файлов.`)
+    return
+  }
+
+  console.log(`\nЗагрузка локальных PDF из: ${localDir}`)
+  console.log(`Найдено файлов: ${files.length}`)
+  if (isDryRun) console.log('(режим dry-run — только показ, без записи)\n')
+  console.log('─'.repeat(50))
+
+  for (const filename of files) {
+    const nameWithoutExt = path.basename(filename, '.pdf')
+    const meta = metaMap[filename] || { source: nameWithoutExt, title: nameWithoutExt }
+    const { source, title } = meta
+
+    process.stdout.write(`\n📄 ${source}  `)
+
+    if (!isDryRun && !isForce) {
+      const loaded = await isAlreadyLoaded(source)
+      if (loaded) {
+        console.log('→ уже загружен, пропускаю (--force для перезаписи)')
+        continue
+      }
+    }
+
+    if (isDryRun) {
+      console.log(`→ ${filename}`)
+      console.log(`   source: "${source}", title: "${title}"`)
+      continue
+    }
+
+    try {
+      const filePath = path.join(localDir, filename)
+      process.stdout.write('читаю файл... ')
+      const buf = fs.readFileSync(filePath)
+
+      process.stdout.write('парсю PDF... ')
+      const parser = new PDFParse({ data: buf })
+      const parsed = await parser.getText()
+      const text = parsed.text || ''
+      console.log(`${text.length} символов`)
+
+      if (text.length < 200) {
+        console.log(`  ⚠️ Слишком мало текста — возможно, PDF содержит сканы (изображения)`)
+        continue
+      }
+
+      const chunks = chunkText(text)
+      console.log(`  → ${chunks.length} чанков`)
+
+      if (isForce) await deleteSource(source)
+
+      const saved = await uploadChunks(chunks, { source, title })
+      console.log(`  ✓ Загружено ${saved}/${chunks.length} чанков`)
+
+    } catch (err) {
+      console.log(`\n  ✗ Ошибка: ${err.message}`)
+    }
+  }
+
+  console.log('\n' + '─'.repeat(50))
+  console.log('Готово.')
+}
+
 // ─── Основной цикл ────────────────────────────────────────────────────────────
 async function main() {
+  if (isLocal) {
+    await loadLocalDocs()
+    return
+  }
+
   if (isCleanup) {
     console.log('\n🧹 Очистка огрызков (всё что не в DOCS)')
     console.log('─'.repeat(50))

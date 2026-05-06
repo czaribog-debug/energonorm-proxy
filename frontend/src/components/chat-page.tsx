@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Paperclip, ArrowUp, FileText, X, Cable, Ruler, Zap, Lightbulb, ThumbsUp, ThumbsDown } from 'lucide-react'
+import { Paperclip, ArrowUp, FileText, X, Cable, Ruler, Zap, Lightbulb, ThumbsUp, ThumbsDown, Mic, MicOff, Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { MessageContent } from '@/components/message-content'
 import { saveFeedback, type Rating } from '@/lib/feedback'
+import { useVoiceInput } from '@/lib/use-voice-input'
+import { exportAnswerToPdf } from '@/lib/export-pdf'
 import type { Message, UploadedDoc } from '@/lib/types'
 
 const EXAMPLE_CARDS = [
@@ -29,9 +31,26 @@ interface Props {
 export function ChatPage({ messages, input, setInput, loading, send, uploadedDocs, onUploadDocs, onRemoveDoc, currentChatId }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const answerRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const [ratings, setRatings] = useState<Record<number, Rating>>({})
+  const [exporting, setExporting] = useState<number | null>(null)
 
   useEffect(() => { setRatings({}) }, [currentChatId])
+
+  const exportPdf = async (idx: number) => {
+    const el = answerRefs.current.get(idx)
+    if (!el) return
+    const question = messages.slice(0, idx).reverse().find((m) => m.role === 'user')?.content ?? ''
+    setExporting(idx)
+    try {
+      const stamp = new Date().toISOString().slice(0, 10)
+      await exportAnswerToPdf({ question, answerEl: el, filename: `energonorm-${stamp}` })
+    } catch (e) {
+      console.error('exportPdf:', e)
+    } finally {
+      setExporting(null)
+    }
+  }
 
   const rate = async (idx: number, rating: Rating) => {
     if (!currentChatId) return
@@ -139,7 +158,14 @@ export function ChatPage({ messages, input, setInput, loading, send, uploadedDoc
                         </div>
                       ) : (
                         <>
-                          <MessageContent text={m.content} />
+                          <div
+                            ref={(el) => {
+                              if (el) answerRefs.current.set(i, el)
+                              else answerRefs.current.delete(i)
+                            }}
+                          >
+                            <MessageContent text={m.content} />
+                          </div>
                           {currentChatId && (
                             <div className="mt-4 pt-3 border-t border-border/60 flex items-center gap-3">
                               <span className="text-xs text-muted-foreground">
@@ -173,6 +199,14 @@ export function ChatPage({ messages, input, setInput, loading, send, uploadedDoc
                                   title="Бесполезный ответ"
                                 >
                                   <ThumbsDown className="w-4 h-4" strokeWidth={2} />
+                                </button>
+                                <button
+                                  onClick={() => exportPdf(i)}
+                                  disabled={exporting === i}
+                                  className="p-1.5 rounded-md border transition-colors text-muted-foreground border-border hover:text-primary hover:bg-primary/5 hover:border-primary/30 disabled:opacity-50"
+                                  title="Скачать ответ в PDF"
+                                >
+                                  <Download className={cn('w-4 h-4', exporting === i && 'animate-pulse')} strokeWidth={2} />
                                 </button>
                               </div>
                             </div>
@@ -215,28 +249,65 @@ interface InputProps {
 }
 
 function ChatInput({ input, setInput, loading, send, onKey, fileRef, handleFiles }: InputProps) {
+  const inputBeforeVoiceRef = useRef('')
+  const voice = useVoiceInput((transcript) => {
+    const prefix = inputBeforeVoiceRef.current
+    setInput(prefix ? `${prefix} ${transcript}` : transcript)
+  })
+
+  const toggleVoice = () => {
+    if (!voice.listening) inputBeforeVoiceRef.current = input
+    voice.toggle()
+  }
+
   return (
     <div className="max-w-2xl mx-auto">
-      <div className="relative rounded-2xl border bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 ring-offset-background transition-shadow">
+      <div
+        className={cn(
+          'relative rounded-2xl border bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 ring-offset-background transition-shadow',
+          voice.listening && 'ring-2 ring-rose-300 ring-offset-2'
+        )}
+      >
         <Textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKey}
-          placeholder="Задайте вопрос по нормативам..."
+          placeholder={voice.listening ? 'Слушаю...' : 'Задайте вопрос по нормативам...'}
           rows={2}
           disabled={loading}
           className="border-0 bg-transparent shadow-none focus-visible:ring-0 resize-none px-4 pt-3 pb-12 min-h-[80px] max-h-48 text-[15px]"
         />
         <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => fileRef.current?.click()}
-            className="h-8 w-8 text-muted-foreground"
-            title="Загрузить PDF"
-          >
-            <Paperclip className="w-4 h-4" />
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => fileRef.current?.click()}
+              className="h-8 w-8 text-muted-foreground"
+              title="Загрузить PDF"
+            >
+              <Paperclip className="w-4 h-4" />
+            </Button>
+            {voice.supported && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleVoice}
+                disabled={loading}
+                className={cn(
+                  'h-8 w-8',
+                  voice.listening ? 'text-rose-600 bg-rose-50 hover:bg-rose-100' : 'text-muted-foreground'
+                )}
+                title={voice.listening ? 'Остановить запись' : 'Голосовой ввод'}
+              >
+                {voice.listening ? (
+                  <MicOff className="w-4 h-4" />
+                ) : (
+                  <Mic className="w-4 h-4" />
+                )}
+              </Button>
+            )}
+          </div>
           <input
             ref={fileRef}
             type="file"
@@ -255,6 +326,9 @@ function ChatInput({ input, setInput, loading, send, onKey, fileRef, handleFiles
           </Button>
         </div>
       </div>
+      {voice.error && (
+        <div className="text-[11px] text-rose-600 text-center mt-2">{voice.error}</div>
+      )}
       <div className="text-[11px] text-muted-foreground text-center mt-2">
         Ответы носят справочный характер. Проверяйте актуальность нормативов.
       </div>
