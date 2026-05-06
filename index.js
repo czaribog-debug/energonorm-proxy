@@ -72,6 +72,38 @@ async function searchWeb(query) {
 // Порог: если RAG нашёл меньше этого числа фрагментов — дополняем веб-поиском
 const RAG_MIN_THRESHOLD = 2;
 
+// Объяснительный вопрос — не требует вердикта "можно/нельзя"
+function isExplanatoryQuestion(text) {
+  const t = text.trim().toLowerCase();
+  // Стартует с объяснительного слова
+  if (/^(почему|зачем|как(\s|ие|ой|ая|ие)|что\s|чем\s|расскажи|объясни|опиши|поясни|для чего|в чём разница|в чем разница)/i.test(t)) return true;
+  // Содержит явный признак объяснения
+  if (/\b(почему|зачем|объясни|расскажи|поясни|в чём смысл|в чем смысл)\b/i.test(t) &&
+      !/\b(можно ли|допустимо ли|разрешено ли|правильно ли)\b/i.test(t)) return true;
+  return false;
+}
+
+// Срезает первую строку с плашкой ✅/❌/⚠️/⛔ + следующий короткий абзац-резюме
+function stripVerdict(text) {
+  const lines = text.split("\n");
+  // Ищем первую строку с эмодзи-вердиктом
+  let i = 0;
+  while (i < lines.length && lines[i].trim() === "") i++;
+  if (i >= lines.length) return text;
+
+  const firstLine = lines[i].trim();
+  const hasVerdict = /^[*_\s]*[✅❌⚠️⛔]/u.test(firstLine);
+  if (!hasVerdict) return text;
+
+  // Удаляем строку с вердиктом и возможный следующий абзац-резюме до пустой строки или раздела
+  const result = [...lines.slice(0, i)];
+  i++;
+  while (i < lines.length && lines[i].trim() !== "" && !/^[📋📄💡]/u.test(lines[i].trim())) i++;
+  while (i < lines.length && lines[i].trim() === "") i++;
+  result.push(...lines.slice(i));
+  return result.join("\n").trim();
+}
+
 // ─── Основной системный промпт ───────────────────────────────────────────────
 const SYSTEM_BASE = `Ты — экспертный AI-ассистент сервиса «ЭнергоНорм» по нормативной базе электроэнергетики России. Аудитория: проектировщики, ГИПы, строители, проверяющие органы.
 
@@ -220,6 +252,17 @@ app.post("/v1/messages", async (req, res) => {
 
     const data = await response.json();
     if (data.error) throw new Error(data.error.message || "Ошибка Claude API");
+
+    // Post-processing: для объяснительных вопросов вырезаем плашку вердикта
+    if (userText && isExplanatoryQuestion(userText) && Array.isArray(data.content)) {
+      data.content = data.content.map(b => {
+        if (b.type === "text" && typeof b.text === "string") {
+          return { ...b, text: stripVerdict(b.text) };
+        }
+        return b;
+      });
+    }
+
     res.json(data);
 
   } catch (err) {
