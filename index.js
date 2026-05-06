@@ -156,31 +156,24 @@ app.post("/v1/messages", async (req, res) => {
   }
 });
 
-// Список источников в базе знаний (агрегация по metadata.source)
+// Список источников в базе знаний через RPC (обходит RLS)
 app.get("/documents", async (req, res) => {
   try {
-    const r = await fetch(
-      `${SUPABASE_URL}/rest/v1/documents?select=metadata`,
-      {
-        headers: {
-          "apikey": SUPABASE_KEY,
-          "Authorization": `Bearer ${SUPABASE_KEY}`,
-        },
-      }
-    );
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/list_sources`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_KEY,
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
+      },
+      body: JSON.stringify({}),
+    });
     const rows = await r.json();
     if (!Array.isArray(rows)) return res.json({ sources: [], total: 0 });
 
-    const counts = new Map();
-    for (const row of rows) {
-      const src = row?.metadata?.source || row?.metadata?.title || "Без названия";
-      counts.set(src, (counts.get(src) || 0) + 1);
-    }
-    const sources = [...counts.entries()]
-      .map(([source, chunks]) => ({ source, chunks }))
-      .sort((a, b) => a.source.localeCompare(b.source, "ru"));
-
-    res.json({ sources, total: rows.length });
+    const sources = rows.map(({ source, chunks }) => ({ source, chunks: Number(chunks) }));
+    const total = sources.reduce((s, r) => s + r.chunks, 0);
+    res.json({ sources, total });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
