@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react'
-import { Paperclip, ArrowUp, FileText, X, Cable, Ruler, Zap, Lightbulb } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Paperclip, ArrowUp, FileText, X, Cable, Ruler, Zap, Lightbulb, ThumbsUp, ThumbsDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { MessageContent } from '@/components/message-content'
+import { saveFeedback, type Rating } from '@/lib/feedback'
 import type { Message, UploadedDoc } from '@/lib/types'
 
 const EXAMPLE_CARDS = [
@@ -22,11 +23,27 @@ interface Props {
   uploadedDocs: UploadedDoc[]
   onUploadDocs: (docs: UploadedDoc[]) => void
   onRemoveDoc: (i: number) => void
+  currentChatId: string | null
 }
 
-export function ChatPage({ messages, input, setInput, loading, send, uploadedDocs, onUploadDocs, onRemoveDoc }: Props) {
+export function ChatPage({ messages, input, setInput, loading, send, uploadedDocs, onUploadDocs, onRemoveDoc, currentChatId }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const [ratings, setRatings] = useState<Record<number, Rating>>({})
+
+  useEffect(() => { setRatings({}) }, [currentChatId])
+
+  const rate = async (idx: number, rating: Rating) => {
+    if (!currentChatId) return
+    setRatings((prev) => ({ ...prev, [idx]: rating }))
+    const answer = messages[idx]?.content ?? ''
+    const question = messages.slice(0, idx).reverse().find((m) => m.role === 'user')?.content ?? ''
+    try {
+      await saveFeedback({ chatId: currentChatId, messageIndex: idx, rating, question, answer })
+    } catch (e) {
+      console.error('saveFeedback:', e)
+    }
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -121,7 +138,37 @@ export function ChatPage({ messages, input, setInput, loading, send, uploadedDoc
                           Анализирую нормативы...
                         </div>
                       ) : (
-                        <MessageContent text={m.content} />
+                        <>
+                          <MessageContent text={m.content} />
+                          {currentChatId && (
+                            <div className="flex items-center gap-1 mt-2">
+                              <button
+                                onClick={() => rate(i, 1)}
+                                className={cn(
+                                  'p-1.5 rounded-md transition-colors',
+                                  ratings[i] === 1
+                                    ? 'text-emerald-600 bg-emerald-50'
+                                    : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                                )}
+                                title="Полезный ответ"
+                              >
+                                <ThumbsUp className="w-3.5 h-3.5" strokeWidth={2} />
+                              </button>
+                              <button
+                                onClick={() => rate(i, -1)}
+                                className={cn(
+                                  'p-1.5 rounded-md transition-colors',
+                                  ratings[i] === -1
+                                    ? 'text-rose-600 bg-rose-50'
+                                    : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                                )}
+                                title="Бесполезный ответ"
+                              >
+                                <ThumbsDown className="w-3.5 h-3.5" strokeWidth={2} />
+                              </button>
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   )}

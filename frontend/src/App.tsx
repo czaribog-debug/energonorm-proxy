@@ -170,6 +170,7 @@ export default function App() {
               uploadedDocs={uploadedDocs}
               onUploadDocs={(docs) => setUploadedDocs((prev) => [...prev, ...docs])}
               onRemoveDoc={(i) => setUploadedDocs((prev) => prev.filter((_, j) => j !== i))}
+              currentChatId={currentChatId}
             />
           )}
           {page === 'docs' && <DocsPage />}
